@@ -1,0 +1,364 @@
+---
+title: "TP_FINAL"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-10-02"
+---
+
+# Trabajo final para la materia Instrumentos de Análisis Territorial Aplicados a Estudios Urbanos 
+
+### Florencia Mogni
+
+# Objetivo del trabajo
+
+El objetivo de este presente trabajo consiste en analizar la cantidad de comisarías existentes en la Ciudad de Buenos Aires y su correlación con la cantidad y tipos de delitos existentes. Este trabajo se propone analizar, en el contexto socioeconómico actual, las características del delito en la ciudad y la existencia de infraestructura para hacer frente a ellos. 
+
+Este análisis se realizará en la Ciudad Autónoma de Buenos Aires, capital del país. Los datos utilizados serán obtenidos del portal de datos abiertos del Gobierno de la Ciudad de Buenos Aires (BA Data)
+
+### Para comenzar con el trabajo, se seleccionan las librerías necesarias para trabajar con los datos. 
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(geoAr)
+library(geofacet)
+library(stringr)
+library(ggmap)
+library(lubridate)
+```
+
+Para ello, se utiliza, en un primer momento, la base de datos de comisarías provistas por el Gobierno de la Ciudad de Buenos Aires.
+
+```{r}
+base_comisarias <- vroom::vroom("https://cdn.buenosaires.gob.ar/datosabiertos/datasets/comisarias-policia-de-la-ciudad/comisarias-policia-de-la-ciudad.csv")
+```
+
+La base de datos posee 15 columnas y 49 filas, que corresponden a las comisarías y a las dependencias de las mismas y sus características tales como su nombre, la dirección en la que se encuentra, la comuna y el barrio al que pertenecen, el tenefóno, entre otras. 
+
+```{r}
+summary(base_comisarias)
+```
+
+Como no todas estas características aportan al análisis, se limpia la base para obtener únicamente los datos relevantes. 
+
+```{r}
+base_comisarias <- base_comisarias %>%
+  select(-calle, -direccion, -observaciones, -observaciones_2, -calle2, -telefonos, -codigo_postal, -codigo_postal_argentino)
+```
+
+```{r}
+head(base_comisarias)
+```
+
+Analizamos la clase de datos del barrio para poder hacer análisis estadísticos con ese dato. 
+
+```{r}
+class(base_comisarias$barrio)
+```
+
+Como el dato es de caracter "character" lo transformamos a "factor". 
+
+```{r}
+base_comisarias$barrio <- as.factor(base_comisarias$barrio)
+```
+
+```{r}
+class(base_comisarias$barrio) 
+```
+
+Para luego poder mapear los puntos en el territorio, levanto la base de las zonas y la limpio para poder trabajar adecuadamente. 
+
+```{r}
+zonas <- sf::st_read("https://cdn.buenosaires.gob.ar/datosabiertos/datasets/ministerio-de-justicia-y-seguridad/comisarias-policia-ciudad/comisarias-policia-de-la-ciudad.geojson")
+```
+
+```{r}
+zonas$barrio <- toupper(zonas$barrio)
+```
+
+```{r}
+zonas <- zonas %>%
+  select(-observacio, -calle2, -nom_3, -nom_2, -telefonos)
+```
+
+Uno las dos bases, para poder obtener los datos geográficos. 
+
+```{r}
+comisarias_geo <- left_join(base_comisarias, zonas, by = "id")
+```
+
+```{r}
+comisarias_geo <- na.omit(comisarias_geo)
+```
+
+```{r}
+class(comisarias_geo$barrio.x) 
+```
+
+Se utiliza también la base de datos de los barrios para poder acceder a sus datos georreferenciados. 
+
+```{r}
+Barrios <- st_read("barrios_data/barrios_wgs84.shp", 
+                   stringsAsFactors = TRUE,
+                   options = "ENCODING=UTF8")
+```
+
+
+```{r}
+comisarias_geo <- comisarias_geo %>% 
+  rename(BARRIO = barrio.x)
+```
+
+```{r}
+comisarias_geo <- comisarias_geo %>%
+  select(-altura.x, -nombre.y, -calle, -altura.y, -altura.x)
+```
+
+Uno la última base que cargamos con la base de comisarías ya construida. 
+
+```{r}
+comisarias_caba <- left_join(comisarias_geo, Barrios, by = "BARRIO")
+```
+
+```{r}
+comisarias_caba <- comisarias_caba %>%
+  select(-comuna.x, -barrio.y, -nombre_map, -publicable, -COMUNA, -OBJETO)
+```
+
+Convierto este nuevo dataset en un dataset espacial. 
+
+```{r}
+comisarias_caba <- st_as_sf(comisarias_caba)
+```
+
+```{r}
+class(comisarias_caba)
+```
+
+Como el análisis busca observar la distribución de las comisarías en la Ciudad Autónoma de Buenos Aires, procedo a localizar geográficamente la ubicación de cada una de las estaciones de policía. 
+
+```{r}
+ggplot() +
+  geom_sf(data = Barrios, color = "blue") +
+  geom_point(data = comisarias_caba, aes(x = long, y = lat, color = "Comisarias"), size = 2, alpha = 0.6) +
+  scale_color_manual(values = "dark green") +  
+  theme_void() +  
+  labs(title = "Distribución de Comisarías en CABA, 2023")
+```
+
+### Se observa que no hay un parámetro definido en la localización de las comisarías y determinados barrios no cuentan con ninguna. 
+
+Por ello, se busca determinar la cantidad de comisarías que existen por barrio para analizar luego si se condicen con la cantidad de delitos que existen o si responden a algún otro patrón. 
+
+```{r}
+comisarias_barrio <- comisarias_caba %>% 
+  group_by(BARRIO) %>% 
+  summarise(cantidad=n())
+```
+
+```{r}
+ggplot()+
+  geom_bar(data=comisarias_barrio %>%
+             top_n(5, cantidad), aes(x=reorder(BARRIO, -cantidad), weight=cantidad), fill="#52796f")+
+  labs(title="Cantidad de comisarias por barrio - Top 8",
+       subtitle= "Ciudad de Buenos Aires, 2023", 
+       x="Barrio",
+       y="Cantidad de comisarias", 
+       caption = "Fuente: BA DATA")+
+  theme_minimal()
+```
+
+
+### Los barrios con mayor cantidad de comisarías son Balvanera, Villa Urquiza y Cabllito, con tres estaciones de policía. Por otro lado, existen 19 barrios que no poseen comisarías. 
+
+```{r}
+comisarias_barrio <- comisarias_barrio %>% select(-geometry.x) %>%
+  st_drop_geometry()
+```
+
+```{r}
+comisarias_barrio_geo <- left_join(comisarias_barrio, Barrios, by="BARRIO") 
+```
+
+```{r}
+comisarias_barrio_geo <- st_as_sf(comisarias_barrio_geo)
+```
+
+Se realiza una visualización de la cantidad de comisarías por barrio. 
+
+```{r}
+ggplot() +
+  geom_sf(data = comisarias_barrio_geo, aes(fill = cantidad), color = "white") +
+  labs(title = "Comisarías por barrio",
+       subtitle = "Barrios de CABA, 2023",
+       fill = "Cantidad",
+       caption = "Fuente: BA DATA") +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1) +
+  theme_minimal() +
+  theme(panel.background = element_rect(fill = "lightblue")) +
+  facet_wrap(~ BARRIO, ncol = 7, labeller = label_bquote(.(BARRIO))) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        strip.text = element_text(size = 7))  
+
+```
+
+
+Para observarlo con mayor precisión, se realiza un gráfico en el que se muestran los barrios de acuerdo a la cantidad de comisarías que existen allí. 
+
+```{r}
+ggplot()+
+  geom_sf(data=comisarias_barrio_geo, aes(fill=cantidad), color="white")+
+  labs(title = "Cantidad de comisarias",
+       subtitle = "Barrios de CABA",
+       fill = "Cantidad",
+       caption= "Fuente: BA DATA") +
+  scale_fill_distiller(palette = "Teal", direction = 1) +
+  theme_minimal()
+```
+
+
+### A partir de su visualización en el mapa, se observa que tanto en el sur como en el corredor noroeste no existen comisarías. También se puede determinar que hay una mayor concentración en el centro de la ciudad y hacia el noreste. 
+
+A la luz de esta información, se busca determinar si la existencia de estas comisarías se condice con la cantidad de delitos que presentan estos barrios. Para ello, se utiliza la base de datos de delitos presentada por el Gobierno de la Ciudad de Buenos Aires. 
+
+```{r}
+delitos_caba <- vroom::vroom("https://cdn.buenosaires.gob.ar/datosabiertos/datasets/ministerio-de-justicia-y-seguridad/delitos/delitos_2021.csv")
+```
+
+
+El dataframe a utilizar posee 88567 filas, correspondientes a cada uno de los delitos, y 14 columnas en donde se destacan sus características. 
+
+```{r}
+delitos_caba <- delitos_caba %>% select(-uso_armas, -cantidad) 
+```
+
+```{r}
+delitos_caba$longitud <- gsub("(\\d{2})(\\d{1})(\\d+)", "\\1.\\2\\3", delitos_caba$longitud)
+
+delitos_caba$latitud <- gsub("(\\d{2})(\\d{1})(\\d+)", "\\1.\\2\\3", delitos_caba$latitud)
+```
+
+```{r}
+class(delitos_caba$longitud)
+class(delitos_caba$latitud)
+```
+
+```{r}
+delitos_caba$longitud <- as.numeric(delitos_caba$longitud)
+delitos_caba$latitud <- as.numeric(delitos_caba$latitud)
+```
+
+```{r}
+str(delitos_caba)
+```
+
+```{r}
+delitos_caba <- na.omit(delitos_caba)
+```
+
+Se ubican los puntos de los delitos en el territorio. 
+
+```{r}
+ggplot(delitos_caba)+
+  geom_point(aes(x=longitud, y=latitud))
+```
+
+
+```{r}
+caba_bbox <- make_bbox(delitos_caba$longitud, delitos_caba$latitud)
+```
+
+```{r}
+caba_bbox
+```
+
+```{r}
+mapa_base <- get_stamenmap(bbox = caba_bbox,
+                           maptype = "toner-lite",
+                           zoom = 12)
+```
+
+Lo graficamos nuevamente con un mapa base de la Ciudad de Buenos Aires para poder contextualizarlos. 
+
+```{r}
+ggmap(mapa_base)+
+  geom_point(data=delitos_caba, aes(x=longitud, y=latitud))
+```
+
+
+### A priori parecería que no hay una correlación entre las comisarías y los delitos, en tanto los delitos aparecen en todo el territorio de la Capital Federal. Sería adecuado observar en un mapa de densidad si las zonas que poseen comisarías tienen mayor cantidad de delitos. 
+
+```{r}
+ggmap(mapa_base) +
+    geom_bin2d(data = delitos_caba, 
+               aes(x = longitud, y = latitud))
+```
+
+```{r}
+mapas_delitos <- ggmap(mapa_base) +
+    geom_bin2d(data = delitos_caba, 
+               aes(x = longitud, y = latitud))
+```
+
+```{r}
+mapa_final <- mapas_delitos +
+  geom_point(data = comisarias_caba, aes(x = long, y = lat), color = "red", size = 2, alpha = 0.5) +
+  theme_void()
+
+```
+
+```{r}
+mapa_final <- mapas_delitos +
+  geom_point(data = comisarias_caba, aes(x = long, y = lat), color = "red", size = 2, alpha = 0.5) +
+    labs(
+    title = "Densidad de delitos y ubicación de Comisarías",
+    subtitle = "CABA, 2021",
+    caption = "Fuente: BA DATA"
+  ) +
+  theme_void()
+```
+
+### Analizamos el mapa de densidad de los delitos con la localización de las comisarías vistas anteriormente. Se puede decir que ahora sí aparece una correlación entre las comisarías y los delitos, sobre todo en el este y centro de la Capital Federal 
+
+```{r}
+print(mapa_final)
+```
+
+
+```{r}
+ggmap(mapa_base) +
+    stat_density2d(data = delitos_caba, 
+               aes(x = longitud, y = latitud, fill = after_stat(level)), geom = "polygon", alpha=0.75)+
+  scale_fill_distiller(palette = "Spectral")+
+  labs(title="Densidad de delitos por comuna",
+       subtitle="CABA, 2021")+
+  facet_wrap(~comuna, ncol=5) + 
+  theme_void()
+```
+
+Por último, analizamos la densidad de por tipo de delitos en la Capital Federal. 
+
+```{r}
+ggmap(mapa_base) +
+    stat_density2d(data = delitos_caba, 
+               aes(x = longitud, y = latitud, fill = after_stat(level)), geom = "polygon", alpha=0.75)+
+  scale_fill_distiller(palette = "Spectral")+
+  labs(title="Densidad por tipo de delito",
+       subtitle="CABA, 2021")+
+  facet_wrap(~tipo, ncol=4) +
+  theme_void()
+```
+
+
+
+
+
+
+
+
